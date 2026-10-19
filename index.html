@@ -6,6 +6,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Merry-Go-Round | Lucky Draw</title>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
 <style>
 :root {
   --bg: #100d25;
@@ -268,21 +270,11 @@ button:disabled {
   font-weight: 900;
 }
 
-.warning {
-  border-color: #7e6333;
-  background: #30243a;
-}
-
 .footer {
   text-align: center;
   color: #8f87b4;
   font-size: .75rem;
   margin-top: 22px;
-}
-
-.tiny {
-  font-size: .76rem;
-  color: #938ab8;
 }
 
 @media (max-width: 600px) {
@@ -314,15 +306,14 @@ button:disabled {
 
   <p class="hint">
     Enter your name, then choose one available card.
-    This is a visual demo: selections are saved only in this browser
-    and are not shared with other phones yet.
+    Your selection is shared with the group through Supabase.
   </p>
 
   <div class="row">
     <div class="field">
       <label for="memberName">Your name</label>
-      <input id="memberName" maxlength="50"
-        placeholder="e.g. Oscar Kiamba" autocomplete="name">
+      <input id="memberName" maxlength="80"
+        placeholder="Enter your name" autocomplete="name">
     </div>
 
     <div style="display:flex;align-items:end">
@@ -330,42 +321,37 @@ button:disabled {
     </div>
   </div>
 
-  <div id="joinStatus" class="status">
-    Enter your name to start.
+  <div id="joinStatus" class="status" aria-live="polite">
+    Connecting to the shared draw...
   </div>
 </section>
 
 <section class="panel">
   <div class="sectionhead">
     <h2>② Choose your mystery card</h2>
-    <span id="countPill" class="pill">0 of 10 selected</span>
+    <span id="countPill" class="pill">Loading...</span>
   </div>
 
   <p class="hint">
-    Choose carefully. In the real shared version, each number will be
-    reserved so no two people receive the same turn.
+    Choose one available card. Once confirmed, it cannot be selected by another member.
   </p>
 
   <div id="cards" class="grid"></div>
 
   <div id="scratchArea" class="status hidden">
     <div id="scratchPrompt">
-      <strong>Your card is ready.</strong>
-      Rub or tap the card below to reveal your number.
+      Select a card to get started.
     </div>
 
     <div style="margin-top:12px">
       <canvas id="scratchCanvas" width="650" height="180"
+        aria-label="Scratch card to reveal your payment turn"
         style="width:100%;max-width:650px;height:auto;border-radius:12px;touch-action:none;display:block">
       </canvas>
     </div>
 
     <div class="row" style="margin-top:12px">
-      <button id="revealBtn" class="primary">Reveal my number</button>
-
-      <!-- Temporarily hidden; uncomment to restore the reset button.
-      <button id="resetBtn" class="secondary">Clear my demo data</button>
-      -->
+      <button id="revealBtn" class="primary" disabled>Reveal my number</button>
     </div>
   </div>
 </section>
@@ -377,8 +363,7 @@ button:disabled {
   </div>
 
   <p class="hint">
-    The final schedule appears only when all 10 places are filled in this demo.
-    The production version will reveal this section to every member at the same time.
+    All members can see the final schedule after all 10 selections have been completed.
   </p>
 
   <div id="results" class="resultlist">
@@ -386,112 +371,39 @@ button:disabled {
   </div>
 </section>
 
-
-
 <div class="footer">Made for your group · Keep the draw fair and transparent</div>
 
 </main>
 
 <script>
+'use strict';
+
 const TOTAL = 10;
 const $ = id => document.getElementById(id);
 
+const SUPABASE_URL = 'https://nbticnwgtxjmngpaddml.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_17jqGRjzVWtdyOdFsCsktw_P228-C3b';
+
+const db = window.supabase.createClient(
+  SUPABASE_URL,
+  SUPABASE_KEY
+);
+
 let name = '';
 let chosen = null;
+let myCard = null;
+let myTurn = null;
 let revealed = false;
+let busy = false;
+let scratching = false;
 
-let entries = JSON.parse(
-  localStorage.getItem('merryDemoEntries') || '[]'
-);
+let selectedCards = [];
+let selectedCount = 0;
+let results = null;
+let refreshInProgress = false;
 
-let cardNumbers = [...Array(TOTAL)].map((_, i) => i + 1);
-
-// Shuffle only for this local visual demo.
-// Production assignments must be server-side.
-function shuffle(a) {
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
-if (!localStorage.getItem('merryDemoOrder')) {
-  localStorage.setItem(
-    'merryDemoOrder',
-    JSON.stringify(shuffle([...cardNumbers]))
-  );
-}
-
-const order = JSON.parse(
-  localStorage.getItem('merryDemoOrder')
-);
-
-function save() {
-  localStorage.setItem(
-    'merryDemoEntries',
-    JSON.stringify(entries)
-  );
-}
-
-function render() {
-  $('cards').innerHTML = '';
-
-  for (let i = 1; i <= TOTAL; i++) {
-    const e = entries.find(x => x.card === i);
-
-    const mine = e && name &&
-      e.name.toLowerCase() === name.toLowerCase();
-
-    const el = document.createElement('button');
-
-    el.type = 'button';
-    el.className =
-      'card ' +
-      (!e ? 'covered ' : '') +
-      (e ? 'taken ' : '') +
-      (chosen === i ? 'selected ' : '') +
-      (mine ? 'mine' : '');
-
-    el.disabled = !!e || !name;
-
-    el.innerHTML = e
-      ? `<span class="number">✓</span>
-         <span class="small">${mine ? 'YOUR CARD' : 'PICKED'}</span>`
-      : `<span class="number">?</span>
-         <span class="small">MYSTERY CARD ${String(i).padStart(2, '0')}</span>`;
-
-    el.addEventListener('click', () => selectCard(i));
-
-    $('cards').appendChild(el);
-  }
-
-  $('countPill').textContent =
-    `${entries.length} of ${TOTAL} selected`;
-
-  if (entries.length === TOTAL) {
-    $('resultsPill').textContent = 'Draw complete';
-
-    $('results').innerHTML = [...entries]
-      .sort((a, b) => a.turn - b.turn)
-      .map(e => `
-        <div class="result">
-          <span>${escapeHtml(e.name)}</span>
-          <span class="turn">Turn ${e.turn}</span>
-        </div>
-      `)
-      .join('');
-
-  } else {
-    $('resultsPill').textContent = `Waiting for all ${TOTAL}`;
-
-    $('results').innerHTML =
-      '<div class="status">The results are hidden until the draw is complete.</div>';
-  }
-}
-
-function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, c => ({
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, c => ({
     '&': '&amp;',
     '<': '&lt;',
     '>': '&gt;',
@@ -500,63 +412,220 @@ function escapeHtml(s) {
   }[c]));
 }
 
-$('joinBtn').onclick = () => {
-  const n = $('memberName').value.trim();
+function setStatus(message) {
+  $('joinStatus').textContent = message;
+}
 
-  if (!n) {
-    $('joinStatus').textContent = 'Please enter your name first.';
-    return;
+function assignmentKey(memberName) {
+  return 'merryMyAssignment:' +
+    memberName.trim().toLowerCase();
+}
+
+function saveMyAssignment() {
+  if (!name || myCard === null || myTurn === null) return;
+
+  localStorage.setItem(assignmentKey(name), JSON.stringify({
+    name,
+    card: myCard,
+    turn: myTurn
+  }));
+}
+
+function loadMyAssignment() {
+  try {
+    return JSON.parse(
+      localStorage.getItem(assignmentKey(name)) || 'null'
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function refreshStatus() {
+  if (refreshInProgress) return false;
+
+  refreshInProgress = true;
+
+  try {
+    const { data, error } = await db.rpc('get_draw_status');
+
+    if (error) throw error;
+
+    selectedCount = Number(data.selected_count || 0);
+    selectedCards = (data.selected_cards || []).map(Number);
+
+    results = data.complete && selectedCount === TOTAL
+      ? (data.results || [])
+      : null;
+
+    render();
+    return true;
+
+  } catch (error) {
+    console.error('Draw status error:', error);
+
+    $('countPill').textContent = 'Connection error';
+
+    if (!name) {
+      setStatus(
+        'Could not connect to the shared draw. Check your Supabase setup and refresh the page.'
+      );
+    }
+
+    return false;
+
+  } finally {
+    refreshInProgress = false;
+  }
+}
+
+function render() {
+  $('cards').innerHTML = '';
+
+  for (let i = 1; i <= TOTAL; i++) {
+    const taken = selectedCards.includes(i);
+    const mine = myCard === i;
+
+    const card = document.createElement('button');
+    card.type = 'button';
+
+    card.className = 'card ' +
+      (!taken ? 'covered ' : 'taken ') +
+      (chosen === i ? 'selected ' : '') +
+      (mine ? 'mine' : '');
+
+    card.disabled = busy || !name || (taken && !mine);
+
+    card.innerHTML = taken
+      ? `<span class="number">${mine && myTurn !== null ? myTurn : '✓'}</span>
+         <span class="small">${mine ? 'YOUR CARD' : 'PICKED'}</span>`
+      : `<span class="number">?</span>
+         <span class="small">MYSTERY CARD ${String(i).padStart(2, '0')}</span>`;
+
+    card.addEventListener('click', () => selectCard(i));
+    $('cards').appendChild(card);
   }
 
-  name = n;
+  $('countPill').textContent =
+    `${selectedCount} of ${TOTAL} selected`;
 
-  const existing = entries.find(
-    e => e.name.toLowerCase() === name.toLowerCase()
-  );
+  $('results').innerHTML = '';
 
-  if (existing) {
-    chosen = existing.card;
-    revealed = true;
+  if (results && selectedCount === TOTAL) {
+    $('resultsPill').textContent = 'Draw complete';
 
-    $('joinStatus').innerHTML =
-      `Welcome back, <strong>${escapeHtml(name)}</strong>. ` +
-      'Your card is already recorded in this browser.';
+    for (const entry of results) {
+      const row = document.createElement('div');
+      row.className = 'result';
 
-    $('scratchArea').classList.remove('hidden');
-    drawScratch(existing.turn, true);
+      const member = document.createElement('span');
+      member.textContent = entry.member_name;
 
+      const turn = document.createElement('span');
+      turn.className = 'turn';
+      turn.textContent = `Turn ${entry.assigned_number}`;
+
+      row.append(member, turn);
+      $('results').appendChild(row);
+    }
   } else {
-    $('joinStatus').innerHTML =
-      `Welcome, <strong>${escapeHtml(name)}</strong>. ` +
-      'Now select one available card.';
+    $('resultsPill').textContent = `Waiting for all ${TOTAL}`;
+
+    const message = document.createElement('div');
+    message.className = 'status';
+    message.textContent =
+      'The results are hidden until the draw is complete.';
+
+    $('results').appendChild(message);
   }
 
-  render();
-};
+  $('revealBtn').disabled =
+    busy || !chosen || revealed || !name;
+}
 
-function selectCard(i) {
-  if (!name) {
-    $('joinStatus').textContent =
-      'Enter your name first, then continue.';
+$('joinBtn').addEventListener('click', async () => {
+  const enteredName = $('memberName').value.trim();
+
+  if (enteredName.length < 2 || enteredName.length > 80) {
+    setStatus('Enter a name between 2 and 80 characters.');
     return;
   }
 
-  if (entries.some(
-    e => e.name.toLowerCase() === name.toLowerCase()
-  )) {
-    alert('This name already has a card in this browser.');
+  name = enteredName;
+  $('joinBtn').disabled = true;
+  $('memberName').disabled = true;
+
+  try {
+    const connected = await refreshStatus();
+
+    if (!connected) {
+      $('memberName').disabled = false;
+      return;
+    }
+
+    const cached = loadMyAssignment();
+
+    if (cached && Number.isInteger(Number(cached.card)) &&
+        Number.isInteger(Number(cached.turn))) {
+
+      myCard = Number(cached.card);
+      myTurn = Number(cached.turn);
+
+      // Verify the cached assignment still exists in the shared database.
+      if (selectedCards.includes(myCard)) {
+        chosen = myCard;
+        revealed = true;
+
+        $('scratchArea').classList.remove('hidden');
+        drawScratch(myTurn, true);
+
+        $('scratchPrompt').textContent =
+          `Welcome back, ${name}. Your turn is ${myTurn}.`;
+
+        setStatus(`Welcome back, ${name}. Your assignment is saved.`);
+      } else {
+        myCard = null;
+        myTurn = null;
+        chosen = null;
+        revealed = false;
+
+        $('scratchArea').classList.add('hidden');
+        setStatus('Your previous local assignment was not found in the shared draw. Please contact the draw organiser.');
+      }
+    } else {
+      chosen = null;
+      revealed = false;
+
+      $('scratchArea').classList.add('hidden');
+      setStatus(`Welcome, ${name}. Choose one available card.`);
+    }
+
+    render();
+
+  } catch (error) {
+    console.error(error);
+    setStatus('Something went wrong. Please refresh and try again.');
+    $('memberName').disabled = false;
+
+  } finally {
+    $('joinBtn').disabled = false;
+  }
+});
+
+function selectCard(cardNumber) {
+  if (!name || busy || revealed) return;
+
+  if (selectedCards.includes(cardNumber)) {
+    setStatus('That card has already been selected. Choose another.');
     return;
   }
 
-  if (entries.some(e => e.card === i)) return;
-
-  chosen = i;
-  revealed = false;
+  chosen = cardNumber;
 
   $('scratchArea').classList.remove('hidden');
 
-  $('scratchPrompt').innerHTML =
-    '<strong>Card selected!</strong> Scratch the silver cover or press “Reveal my number”.';
+  $('scratchPrompt').textContent =
+    'Card selected! Scratch the cover or press “Reveal my number”.';
 
   drawScratch(null, false);
   render();
@@ -568,13 +637,14 @@ function selectCard(i) {
 }
 
 function drawScratch(turn, done) {
-  const c = $('scratchCanvas');
-  const ctx = c.getContext('2d');
+  const canvas = $('scratchCanvas');
+  const ctx = canvas.getContext('2d');
 
-  ctx.clearRect(0, 0, c.width, c.height);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   ctx.fillStyle = '#f5c86b';
-  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   ctx.fillStyle = '#24183e';
   ctx.textAlign = 'center';
@@ -582,59 +652,57 @@ function drawScratch(turn, done) {
 
   ctx.fillText(
     done ? 'YOUR TURN IS' : 'YOUR LUCKY NUMBER',
-    c.width / 2,
+    canvas.width / 2,
     64
   );
 
   ctx.font = 'bold 64px system-ui';
-
   ctx.fillText(
     done ? String(turn) : '?',
-    c.width / 2,
+    canvas.width / 2,
     137
   );
 
   if (!done) {
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = '#aaaab5';
-    ctx.fillRect(0, 0, c.width, c.height);
-
-    const g = ctx.createLinearGradient(
-      0, 0, c.width, c.height
+    const gradient = ctx.createLinearGradient(
+      0, 0, canvas.width, canvas.height
     );
 
-    g.addColorStop(0, '#dedee5');
-    g.addColorStop(.5, '#9293a3');
-    g.addColorStop(1, '#c8c8d3');
+    gradient.addColorStop(0, '#dedee5');
+    gradient.addColorStop(.5, '#9293a3');
+    gradient.addColorStop(1, '#c8c8d3');
 
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     ctx.fillStyle = '#4c4564';
-    ctx.textAlign = 'center';
     ctx.font = 'bold 26px system-ui';
-    ctx.fillText('SCRATCH HERE ✦', c.width / 2, 100);
+    ctx.fillText(
+      'SCRATCH HERE ✦',
+      canvas.width / 2,
+      100
+    );
 
-    ctx.globalCompositeOperation = 'source-over';
-    c.dataset.covered = 'yes';
-
+    canvas.dataset.covered = 'yes';
   } else {
-    c.dataset.covered = 'no';
+    canvas.dataset.covered = 'no';
   }
 }
 
-let scratching = false;
-const can = $('scratchCanvas');
+const canvas = $('scratchCanvas');
 
-function scratch(e) {
-  if (!scratching || !chosen || revealed) return;
+function scratch(event) {
+  if (!scratching || !chosen || revealed || busy) return;
 
-  const r = can.getBoundingClientRect();
+  const rect = canvas.getBoundingClientRect();
 
-  const x = (e.clientX - r.left) * can.width / r.width;
-  const y = (e.clientY - r.top) * can.height / r.height;
+  const x = (event.clientX - rect.left) *
+    canvas.width / rect.width;
 
-  const ctx = can.getContext('2d');
+  const y = (event.clientY - rect.top) *
+    canvas.height / rect.height;
+
+  const ctx = canvas.getContext('2d');
 
   ctx.globalCompositeOperation = 'destination-out';
   ctx.beginPath();
@@ -643,70 +711,86 @@ function scratch(e) {
   ctx.globalCompositeOperation = 'source-over';
 }
 
-can.addEventListener('pointerdown', e => {
-  if (!chosen || revealed) return;
+canvas.addEventListener('pointerdown', event => {
+  if (!chosen || revealed || busy) return;
 
   scratching = true;
-  can.setPointerCapture(e.pointerId);
-  scratch(e);
+  canvas.setPointerCapture(event.pointerId);
+  scratch(event);
 });
 
-can.addEventListener('pointermove', scratch);
-can.addEventListener('pointerup', () => scratching = false);
-can.addEventListener('pointercancel', () => scratching = false);
+canvas.addEventListener('pointermove', scratch);
+canvas.addEventListener('pointerup', () => scratching = false);
+canvas.addEventListener('pointercancel', () => scratching = false);
+canvas.addEventListener('lostpointercapture', () => scratching = false);
 
-$('revealBtn').onclick = () => {
-  if (!chosen) {
-    alert('Choose a card first.');
-    return;
-  }
+$('revealBtn').addEventListener('click', async () => {
+  if (!name || !chosen || revealed || busy) return;
 
-  if (revealed) return;
-
-  const turn = order[chosen - 1];
-
-  entries.push({
-    name,
-    card: chosen,
-    turn
-  });
-
-  save();
-
-  revealed = true;
-  drawScratch(turn, true);
-
-  $('scratchPrompt').innerHTML =
-    `<strong>Congratulations, ${escapeHtml(name)}!</strong> ` +
-    `Your payment turn is <strong>${turn}</strong>. ` +
-    'Remember: this is only a local demo.';
-
+  busy = true;
   render();
-};
 
-/*
-Temporarily disabled reset handler.
-Uncomment this block when you want to restore the reset button.
+  $('scratchPrompt').textContent =
+    'Reserving your card and assigning your turn...';
 
-$('resetBtn').onclick = () => {
-  if (confirm(
-    'Clear all demo entries stored in this browser? ' +
-    'This cannot clear data on anyone else’s device.'
-  )) {
-    entries = [];
+  try {
+    const { data, error } = await db.rpc('claim_number', {
+      p_member_name: name,
+      p_card_number: chosen
+    });
+
+    if (error) throw error;
+
+    myCard = Number(data.selected_card);
+    myTurn = Number(data.assigned_number);
+    chosen = myCard;
+    revealed = true;
+
+    saveMyAssignment();
+
+    $('scratchArea').classList.remove('hidden');
+    drawScratch(myTurn, true);
+
+    $('scratchPrompt').textContent =
+      `Congratulations, ${name}! Your payment turn is ${myTurn}.`;
+
+    setStatus(
+      data.already_registered
+        ? `Your existing assignment is Turn ${myTurn}.`
+        : `Your card is confirmed. Your payment turn is ${myTurn}.`
+    );
+
+    await refreshStatus();
+
+  } catch (error) {
+    console.error('Number assignment error:', error);
+
     chosen = null;
-    revealed = false;
-    name = '';
 
-    localStorage.removeItem('merryDemoEntries');
-    localStorage.removeItem('merryDemoOrder');
+    $('scratchPrompt').textContent =
+      error.message ||
+      'The card could not be reserved. Please refresh and try again.';
 
-    location.reload();
+    setStatus(
+      'The reservation failed. Check the message on your scratch card before trying again.'
+    );
+
+    await refreshStatus();
+
+  } finally {
+    busy = false;
+    render();
   }
-};
-*/
+});
 
-render();
+// Load shared state immediately.
+refreshStatus();
+
+// Update the shared count and availability periodically.
+setInterval(() => {
+  refreshStatus();
+}, 10000);
 </script>
+
 </body>
 </html>
